@@ -9,29 +9,36 @@ from dotenv import load_dotenv
 
 def query():
     load_dotenv()
-
-    user = os.getenv('USER')
-    password = os.getenv('PASSWORD')
-    dbname = os.getenv('DBNAME')
-
-    conn = psycopg2.connect("dbname="+dbname+" user="+user+" password="+password,
+    # ... (connection setup) ...
+    conn = psycopg2.connect(dbname=os.getenv('DBNAME'), 
+                            user=os.getenv('USER'), 
+                            password=os.getenv('PASSWORD'),
                             cursor_factory=psycopg2.extras.DictCursor)
     cur = conn.cursor()
+    
+    mf_struct = {}
+    
+    # --- TABLE SCAN 1: populate mf-struct with distinct values of grouping attribute (V) ---
+    
     cur.execute("SELECT * FROM sales")
-    
-    _global = []
-    
     for row in cur:
-        if row['quant'] > 10:
-            _global.append(row)
+        # Create a unique key for the group based on attributes V: ['cust']
+        key = tuple(row[attr] for attr in ['cust'])
+        if key not in mf_struct:
+            # Initialize aggregate variables: ['count_1_quant', 'sum_2_quant']
+            mf_struct[key] = {'count_1_quant': 0, 'sum_2_quant': 0}
     
     
-    return tabulate.tabulate(_global,
-                        headers="keys", tablefmt="psql")
+    # --- FUTURE SCANS (2 to 3) WILL GO HERE ---
+    
+    output = []
+    for key, aggs in mf_struct.items():
+        row = {attr: key[i] for i, attr in enumerate(['cust'])}
+        row.update(aggs)
+        output.append(row)
+        
+    return tabulate.tabulate(output, headers="keys", tablefmt="psql")
 
-def main():
-    print(query())
-    
 if "__main__" == __name__:
-    main()
+    print(query())
     

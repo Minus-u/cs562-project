@@ -1,0 +1,6 @@
+cust, count_1_quant, sum_2_quant
+2
+cust
+count_1_quant, sum_2_quant
+1.state == 'NY'; 2.state == 'NJ'
+NONE
