@@ -22,22 +22,59 @@ def query():
     
     cur.execute("SELECT * FROM sales")
     for row in cur:
-        # Create a unique key for the group based on attributes V: ['cust']
-        key = tuple(row[attr] for attr in ['cust'])
+        # Create a unique key for the group based on attributes V: ['state', 'month']
+        key = tuple(row[attr] for attr in ['state', 'month'])
         if key not in mf_struct:
-            # Initialize aggregate variables: ['count_1_quant', 'sum_2_quant']
-            mf_struct[key] = {'count_1_quant': 0, 'sum_2_quant': 0}
+            # Initialize aggregate variables: ['count(quant)']
+            mf_struct[key] = {'count(quant)': 0}
     
     
-    # --- FUTURE SCANS (2 to 3) WILL GO HERE ---
+    # --- TABLE SCAN 2: simple grouped processing ---
     
+    grouped_results = {}
+
+    cur.execute("SELECT * FROM sales")
+    for row in cur:
+        should_use_row = True
+        if not (row['year'] == 2019):
+            should_use_row = False
+        # Use current row when it matches the parsed filter condition
+        if should_use_row:
+            # Build the group key using parsed grouping attributes
+            group_key = tuple(row[attr] for attr in ['state', 'month'])
+
+            # Create a new group entry the first time we see this key
+            if group_key not in grouped_results:
+                grouped_results[group_key] = {
+                    'count_quant': 0,
+                }
+
+            grouped_results[group_key]['count_quant'] = grouped_results[group_key]['count_quant'] + 1
+    
+    
+    # --- FUTURE MF/EMF SCANS WILL GO HERE ---
     output = []
-    for key, aggs in mf_struct.items():
-        row = {attr: key[i] for i, attr in enumerate(['cust'])}
-        row.update(aggs)
-        output.append(row)
+    if True:
+        for group_key in grouped_results:
+            group_data = grouped_results[group_key]
+
+            output_row = {}
+            for i, attr_name in enumerate(['state', 'month']):
+                output_row[attr_name] = group_key[i]
+
+            output_row['count(quant)'] = group_data['count_quant']
+            output.append(output_row)
+
+        # Sort grouped output so generated result is stable for testing
+        output.sort(key=lambda row: tuple(row[attr_name] for attr_name in ['state']))
+    else:
+        for key, aggs in mf_struct.items():
+            row = {attr: key[i] for i, attr in enumerate(['state', 'month'])}
+            row.update(aggs)
+            output.append(row)
         
     return tabulate.tabulate(output, headers="keys", tablefmt="psql")
+    
 
 if "__main__" == __name__:
     print(query())

@@ -1,0 +1,5 @@
+select state, month, count(quant)
+from sales
+where year = 2019
+group by state, month
+order by state;
