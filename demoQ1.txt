@@ -1,0 +1,5 @@
+SELECT prod, avg(x.quant), count(x.quant)
+FROM sales
+GROUP BY prod; x
+SUCH THAT x.year = 2019
+HAVING count(x.quant) > 5

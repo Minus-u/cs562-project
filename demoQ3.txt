@@ -1,0 +1,5 @@
+SELECT cust, avg(v1.quant), sum(v2.quant)
+FROM sales
+GROUP BY cust; v1, v2
+SUCH THAT v1.state = 'NY', v2.state = 'NJ' AND v2.quant > avg_v1_quant
+HAVING NONE

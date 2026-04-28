@@ -1,0 +1,5 @@
+SELECT cust, prod, sum(v1.quant)
+FROM sales
+GROUP BY cust, prod; v1
+SUCH THAT v1.state = 'NJ'
+HAVING sum(v1.quant) > 100 AND cust = 'Sam'

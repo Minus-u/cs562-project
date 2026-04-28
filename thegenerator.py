@@ -1,16 +1,17 @@
 import subprocess
 import sys
 import re
+import os
 
+# Selects between file-based or interactive input modes.
 def getUserInput():
-    # Check if a file was provided as an argument
     if len(sys.argv) > 1:
         with open(sys.argv[1], 'r') as f:
             return parseInput(f.read())
     else:
-        # Prompt the user interactively if no file is provided
         return interactiveInput()
 
+# Prompts the user for the 6 components of the Phi operator.
 def interactiveInput():
     print("Phi Expression:")
     phiParams = {}
@@ -19,472 +20,212 @@ def interactiveInput():
     phiParams['V'] = [val.strip() for val in input("# 3. V - grouping attributes (comma separated): \n").split(',')]
     phiParams['F-VECT'] = [val.strip() for val in input("# 4. F-VECT - vector of aggregate functions (comma separated): \n").split(',')]
     phiParams['PRED-LIST'] = [val.strip() for val in input("# 5. PRED-LIST - list of predicates (semicolon separated): \n").split(';')]
-    phiParams['GROUPING_VARIABLES'] = []
+    
+    # Names grouping variables 1, 2, 3 to match the relational algebra input style.
+    phiParams['GROUPING_VARIABLES'] = [str(i+1) for i in range(phiParams['n'])]
     
     having = input('# 6. HAVING (or NONE): \n')
     phiParams['HAVING'] = None if having.upper() == 'NONE' else having
     return phiParams
 
+# Uses regular expressions to extract query components from a raw ESQL text file.
 def parseInput(data):
-    # Parses text file for the ESQL query
     data = " ".join(data.split())
     phiParams = {}
-
     try:
-        # 1. Extract S (Select Attributes)
         selectClause = re.search(r'SELECT (.*?) FROM', data, re.IGNORECASE)
         phiParams['S'] = [val.strip() for val in selectClause.group(1).split(',')] if selectClause else []
+        
+        # Extracts the standard WHERE clause for initial filtering.
+        whereClause = re.search(r'WHERE (.*?)(?: GROUP BY| HAVING|$)', data, re.IGNORECASE)
+        phiParams['WHERE'] = whereClause.group(1).strip() if whereClause else None
 
-        # 2. Extract V and n (Grouping Attributes and Count)
-        groupByClause = re.search(
-            r'GROUP\s+BY\s+(.*?)(?:\s+SUCH\s+THAT|\s+HAVING|\s+ORDER\s+BY|$)',
-            data,
-            re.IGNORECASE
-        )
+        groupByClause = re.search(r'GROUP\s+BY\s+(.*?)(?:\s+SUCH\s+THAT|\s+HAVING|$)', data, re.IGNORECASE)
         if groupByClause:
-            groupText = groupByClause.group(1).strip().rstrip(';')
-
+            groupText = groupByClause.group(1).strip()
             if ';' in groupText:
-                # MF/EMF format: GROUP BY cust; x, y, z
                 groupSections = groupText.split(';', 1)
-
-                phiParams['V'] = []
-                for val in groupSections[0].split(','):
-                    value = val.strip()
-                    if value:
-                        phiParams['V'].append(value)
-
-                phiParams['GROUPING_VARIABLES'] = []
-                for val in groupSections[1].split(','):
-                    value = val.strip()
-                    if value:
-                        phiParams['GROUPING_VARIABLES'].append(value)
-
+                phiParams['V'] = [val.strip() for val in groupSections[0].split(',')]
+                phiParams['GROUPING_VARIABLES'] = [val.strip() for val in groupSections[1].split(',')]
                 phiParams['n'] = len(phiParams['GROUPING_VARIABLES'])
             else:
-                # Simple SQL format: GROUP BY cust, prod
-                phiParams['V'] = []
-                for val in groupText.split(','):
-                    value = val.strip().rstrip(';')
-                    if value:
-                        phiParams['V'].append(value)
-
+                phiParams['V'] = [val.strip() for val in groupText.split(',')]
                 phiParams['GROUPING_VARIABLES'] = []
                 phiParams['n'] = 0
-        else:
-            phiParams['V'] = []
-            phiParams['GROUPING_VARIABLES'] = []
-            phiParams['n'] = 0
-
-        # 3. Extract F-VECT (Aggregate Functions)
-        phiParams['F-VECT'] = [item for item in phiParams['S'] if '(' in item]
-
-        # 4. Extract PRED-LIST (Predicates / Sigma)
-        suchThatClause = re.search(
-            r'SUCH\s+THAT\s+(.*?)(?:\s+HAVING|\s+ORDER\s+BY|$)',
-            data,
-            re.IGNORECASE
-        )
-        if suchThatClause:
-            predicateText = suchThatClause.group(1).strip().rstrip(';')
-            phiParams['PRED-LIST'] = []
-            for val in re.split(r'\s*[,;]\s*', predicateText):
-                value = val.strip()
-                if value:
-                    phiParams['PRED-LIST'].append(value)
-        else:
-            phiParams['PRED-LIST'] = []
-
-        # 4.5 Extract simple WHERE condition for non-EMF grouped query path
-        whereClause = re.search(r'WHERE (.*?)( GROUP BY| ORDER BY| HAVING|$)', data, re.IGNORECASE)
-        if whereClause:
-            phiParams['WHERE'] = whereClause.group(1).strip()
-        else:
-            phiParams['WHERE'] = None
-
-        # 4.6 Extract ORDER BY for simple grouped query path
-        orderByClause = re.search(r'ORDER BY (.*?)( HAVING|$)', data, re.IGNORECASE)
-        if orderByClause:
-            phiParams['ORDER BY'] = [val.strip().rstrip(';') for val in orderByClause.group(1).split(',')]
-        else:
-            phiParams['ORDER BY'] = None
-
-        # 5. Extract HAVING (G)
+        
+        # Identifies aggregates by looking for parentheses or the underscore naming convention.
+        phiParams['F-VECT'] = [item for item in phiParams['S'] if '(' in item or '_' in item]
+        
+        suchThatClause = re.search(r'SUCH\s+THAT\s+(.*?)(?:\s+HAVING|$)', data, re.IGNORECASE)
+        phiParams['PRED-LIST'] = [val.strip() for val in suchThatClause.group(1).split(',')] if suchThatClause else []
+            
         havingClause = re.search(r'HAVING (.*)', data, re.IGNORECASE)
-        if havingClause:
-            val = havingClause.group(1).strip()
-            phiParams['HAVING'] = None if val.upper() == 'NONE' else val
-        else:
-            phiParams['HAVING'] = None
-
+        phiParams['HAVING'] = None if not havingClause or havingClause.group(1).strip().upper() == 'NONE' else havingClause.group(1).strip()
     except Exception as e:
-        print(f"Error parsing input file: {e}")
+        print(f"Error parsing input: {e}")
         sys.exit(1)
-
     return phiParams
 
-SALES_SCHEMA = {
-    "cust": "varchar(20)",
-    "prod": "varchar(20)",
-    "day": "integer",
-    "month": "integer",
-    "year": "integer",
-    "state": "char(2)",
-    "quant": "integer",
-    "date": "date"
-}
-
+# Sanitizes aggregate strings to create valid Python dictionary keys.
 def makeAggregateName(expr):
     return expr.replace("(", "_").replace(")", "").replace(".", "_").replace("*", "star").replace(" ", "")
 
 def main():
     phiParams = getUserInput()
 
-    # Prepare aggregate initialization values
+    # Initializes aggregate values to zero, splitting 'avg' into sum and count components.
     initialAggregates = {}
-
     for agg in phiParams['F-VECT']:
-        aggregateName = makeAggregateName(agg)
-
-        if agg.lower().startswith("avg("):
-            initialAggregates[aggregateName + "__sum"] = 0
-            initialAggregates[aggregateName + "__count"] = 0
+        name = makeAggregateName(agg)
+        if "avg" in agg.lower():
+            initialAggregates[name + "__sum"] = 0
+            initialAggregates[name + "__count"] = 0
         else:
-            initialAggregates[aggregateName] = 0
-    groupCols = phiParams['V'] if len(phiParams['V']) > 0 else ['cust', 'prod']
+            initialAggregates[name] = 0
 
-    # Parse simple aggregate expressions in SELECT, for example avg(quant), max(quant), count(*)
-    aggregates = []
-    for agg_expr in phiParams['F-VECT']:
-        aggregateCall = re.match(r"^\s*([A-Za-z_]\w*)\s*\(\s*([A-Za-z_][\w\.]*|\*)\s*\)\s*$", agg_expr)
-        if aggregateCall:
-            aggFunc = aggregateCall.group(1).lower()
-            aggCol = aggregateCall.group(2)
-            if aggFunc in ["avg", "max", "min", "sum", "count"]:
-                aggregates.append({
-                    "expr": agg_expr,
-                    "func": aggFunc,
-                    "col": aggCol
-                })
-
-    # Parse basic WHERE predicates joined by AND
-    filters = []
+    # Translates the global WHERE clause into Python row-access logic.
+    where_filter = "True"
     if phiParams.get('WHERE'):
-        filterTextList = re.split(r"\s+and\s+", phiParams['WHERE'], flags=re.IGNORECASE)
-        for part in filterTextList:
-            parsedFilter = re.match(r"^\s*([A-Za-z_]\w*)\s*(=|!=|>=|<=|>|<)\s*('?[^']*'?|\d+)\s*$", part.strip())
-            if parsedFilter:
-                leftCol = parsedFilter.group(1)
-                operator = parsedFilter.group(2)
-                rawFilterValue = parsedFilter.group(3).strip()
-                if rawFilterValue.startswith("'") and rawFilterValue.endswith("'"):
-                    rightVal = rawFilterValue[1:-1]
-                    rightType = "str"
+        where_filter = re.sub(r"(?<![<>!=])=(?!=)", "==", phiParams['WHERE'])
+        where_filter = where_filter.replace("AND", "and").replace("OR", "or")
+        for key in ["cust", "prod", "day", "month", "year", "state", "quant"]:
+            where_filter = re.sub(rf"\b{key}\b", f"row['{key}']", where_filter)
+
+    # Identifies standard SQL aggregates to be processed during the first scan.
+    scan1_updates = []
+    if phiParams['n'] == 0:
+        for agg in phiParams['F-VECT']:
+            name = makeAggregateName(agg)
+            col = re.search(r"\((.*?)\)", agg).group(1) if '(' in agg else agg.split('_')[-1]
+            
+            if "count" in agg.lower():
+                scan1_updates.append(f"mf_struct[key]['{name}'] += 1")
+            elif "sum" in agg.lower():
+                scan1_updates.append(f"mf_struct[key]['{name}'] += row['{col}']")
+            elif "avg" in agg.lower():
+                scan1_updates.append(f"mf_struct[key]['{name}__sum'] += row['{col}']")
+                scan1_updates.append(f"mf_struct[key]['{name}__count'] += 1")
+            elif "max" in agg.lower():
+                scan1_updates.append(f"if mf_struct[key]['{name}'] is None or row['{col}'] > mf_struct[key]['{name}']: mf_struct[key]['{name}'] = row['{col}']")
+
+    # Generates Scan 1 code with filtering and immediate aggregation for n=0.
+    tableScan1Lines = [
+        'cur.execute("SELECT * FROM sales")',
+        'for row in cur:',
+        f'    if {where_filter}:',
+        f'        key = tuple(row[attr] for attr in {phiParams["V"]})',
+        '        if key not in mf_struct:',
+        f'            mf_struct[key] = {initialAggregates}.copy()'
+    ]
+    if scan1_updates:
+        for line in scan1_updates:
+            tableScan1Lines.append(f'        {line}')
+    tableScan1 = "\n".join(["    " + line for line in tableScan1Lines])
+
+    # Iterates through n grouping variables to generate individual table scan loops.
+    multiScanCode = ""
+    for i in range(phiParams['n']):
+        gv = phiParams['GROUPING_VARIABLES'][i]
+        pred = phiParams['PRED-LIST'][i] if i < len(phiParams['PRED-LIST']) else "True"
+        
+        # Safely converts SQL '=' to Python '==' while preserving existing operators.
+        python_pred = re.sub(r"(?<![<>!=])=(?!=)", "==", pred)
+        python_pred = python_pred.replace("AND", "and").replace("OR", "or")
+        
+        # Translates grouping variable prefixes into current row column access.
+        python_pred = re.sub(rf"\b{gv}\.([a-zA-Z_]\w*)", r"row['\1']", python_pred)
+        
+        # Translates dependent aggregate references into lookups, including inline average math.
+        for agg in phiParams['F-VECT']:
+            agg_name = makeAggregateName(agg)
+            if agg_name in python_pred:
+                if "avg" in agg.lower():
+                    avg_calc = f"(mf_struct[key]['{agg_name}__sum'] / mf_struct[key]['{agg_name}__count'] if mf_struct[key]['{agg_name}__count'] > 0 else 0)"
+                    python_pred = python_pred.replace(agg_name, avg_calc)
                 else:
-                    rightVal = int(rawFilterValue)
-                    rightType = "num"
-                filters.append({
-                    "left": leftCol,
-                    "op": operator,
-                    "right": rightVal,
-                    "right_type": rightType
-                })
+                    python_pred = python_pred.replace(agg_name, f"mf_struct[key]['{agg_name}']")
 
-    # This simple query path is enabled only when input is not using SUCH THAT
-    simpleMode = len([p for p in phiParams['PRED-LIST'] if p]) == 0 and len(groupCols) > 0 and len(aggregates) > 0
-    mfMode = phiParams['n'] > 0 and len(phiParams['PRED-LIST']) > 0
-    
-    firstScanCode = f"""
-    cur.execute("SELECT * FROM sales")
-    for row in cur:
-        # Create a unique key for the group based on attributes V: {phiParams['V']}
-        key = tuple(row[attr] for attr in {phiParams['V']})
-        if key not in mf_struct:
-            # Initialize aggregate variables: {phiParams['F-VECT']}
-            mf_struct[key] = {initialAggregates}
-    """
+        # Determines which aggregates are updated during the current table scan.
+        update_logic = []
+        for agg in phiParams['F-VECT']:
+            name = makeAggregateName(agg)
+            is_match = False
+            # Supports both '1_sum_quant' and 'sum(1.quant)' input formats.
+            if agg.startswith(f"{gv}_") or f"({gv}." in agg:
+                is_match = True
+                col = re.search(r"\((.*?)\)", agg).group(1).split('.')[-1] if '(' in agg else agg.split('_')[-1]
+                func = agg.split('(')[0].lower() if '(' in agg else agg.split('_')[1].lower()
 
-    # Build generated code blocks for aggregate initialization, updates, and output values
-    aggregateSetupLines = []
-    aggregateUpdateLines = []
-    aggregateOutputLines = []
+            # Adds logic to update sums, counts, averages, and maximum values.
+            if is_match:
+                if "count" in func: update_logic.append(f"mf_struct[key]['{name}'] += 1")
+                elif "sum" in func: update_logic.append(f"mf_struct[key]['{name}'] += row['{col}']")
+                elif "avg" in func:
+                    update_logic.append(f"mf_struct[key]['{name}__sum'] += row['{col}']")
+                    update_logic.append(f"mf_struct[key]['{name}__count'] += 1")
+                elif "max" in func:
+                    update_logic.append(f"if row['{col}'] > mf_struct[key]['{name}']: mf_struct[key]['{name}'] = row['{col}']")
+        
+        # Prevents IndentationError by adding 'pass' if no aggregates match the scan.
+        if not update_logic: update_logic.append("pass")
 
-    for spec in aggregates:
-        expr = spec["expr"]
-        func = spec["func"]
-        col = spec["col"]
-        aggregateName = makeAggregateName(expr)
+        # Assembles the scan block with absolute cursor scrolling and group key lookups.
+        scan_lines = [
+            f"# --- TABLE SCAN {i+2}: Processing Grouping Variable {gv} ---",
+            "cur.scroll(0, mode='absolute')",
+            "for row in cur:",
+            f"    key = tuple(row[attr] for attr in {phiParams['V']})",
+            "    if key in mf_struct:",
+            f"        if {python_pred}:"
+        ]
+        for line in update_logic: scan_lines.append(f"            {line}")
+        multiScanCode += "\n".join(["    " + line for line in scan_lines]) + "\n\n"
 
-        if func == "sum":
-            aggregateSetupLines.append(f"                    '{aggregateName}': 0,")
-            if col == "*":
-                aggregateUpdateLines.append(f"            grouped_results[groupKey]['{aggregateName}'] = grouped_results[groupKey]['{aggregateName}'] + 1")
-            else:
-                aggregateUpdateLines.append(f"            grouped_results[groupKey]['{aggregateName}'] = grouped_results[groupKey]['{aggregateName}'] + row['{col}']")
-            aggregateOutputLines.append(f"            outputRow['{expr}'] = groupData['{aggregateName}']")
-
-        elif func == "count":
-            aggregateSetupLines.append(f"                    '{aggregateName}': 0,")
-            aggregateUpdateLines.append(f"            grouped_results[groupKey]['{aggregateName}'] = grouped_results[groupKey]['{aggregateName}'] + 1")
-            aggregateOutputLines.append(f"            outputRow['{expr}'] = groupData['{aggregateName}']")
-
-        elif func == "max":
-            if col == "*":
-                aggregateSetupLines.append(f"                    '{aggregateName}': None,")
-                aggregateUpdateLines.append(f"            if grouped_results[groupKey]['{aggregateName}'] is None or 1 > grouped_results[groupKey]['{aggregateName}']:")
-                aggregateUpdateLines.append(f"                grouped_results[groupKey]['{aggregateName}'] = 1")
-            else:
-                aggregateSetupLines.append(f"                    '{aggregateName}': None,")
-                aggregateUpdateLines.append(f"            if grouped_results[groupKey]['{aggregateName}'] is None or row['{col}'] > grouped_results[groupKey]['{aggregateName}']:")
-                aggregateUpdateLines.append(f"                grouped_results[groupKey]['{aggregateName}'] = row['{col}']")
-            aggregateOutputLines.append(f"            outputRow['{expr}'] = groupData['{aggregateName}']")
-
-        elif func == "min":
-            if col == "*":
-                aggregateSetupLines.append(f"                    '{aggregateName}': None,")
-                aggregateUpdateLines.append(f"            if grouped_results[groupKey]['{aggregateName}'] is None or 1 < grouped_results[groupKey]['{aggregateName}']:")
-                aggregateUpdateLines.append(f"                grouped_results[groupKey]['{aggregateName}'] = 1")
-            else:
-                aggregateSetupLines.append(f"                    '{aggregateName}': None,")
-                aggregateUpdateLines.append(f"            if grouped_results[groupKey]['{aggregateName}'] is None or row['{col}'] < grouped_results[groupKey]['{aggregateName}']:")
-                aggregateUpdateLines.append(f"                grouped_results[groupKey]['{aggregateName}'] = row['{col}']")
-            aggregateOutputLines.append(f"            outputRow['{expr}'] = groupData['{aggregateName}']")
-
-        elif func == "avg":
-            avgSumName = aggregateName + "__sum"
-            avgCountName = aggregateName + "__count"
-            aggregateSetupLines.append(f"                    '{avgSumName}': 0,")
-            aggregateSetupLines.append(f"                    '{avgCountName}': 0,")
-            if col == "*":
-                aggregateUpdateLines.append(f"            grouped_results[groupKey]['{avgSumName}'] = grouped_results[groupKey]['{avgSumName}'] + 1")
-            else:
-                aggregateUpdateLines.append(f"            grouped_results[groupKey]['{avgSumName}'] = grouped_results[groupKey]['{avgSumName}'] + row['{col}']")
-            aggregateUpdateLines.append(f"            grouped_results[groupKey]['{avgCountName}'] = grouped_results[groupKey]['{avgCountName}'] + 1")
-            aggregateOutputLines.append(f"            if groupData['{avgCountName}'] > 0:")
-            aggregateOutputLines.append(f"                outputRow['{expr}'] = groupData['{avgSumName}'] / groupData['{avgCountName}']")
-            aggregateOutputLines.append("            else:")
-            aggregateOutputLines.append(f"                outputRow['{expr}'] = 0")
-
-    filterLines = ["        should_use_row = True"]
-    for cond in filters:
-        op = "==" if cond["op"] == "=" else cond["op"]
-        if cond["right_type"] == "str":
-            filterLines.append(f"        if not (row['{cond['left']}'] {op} '{cond['right']}'):")
-            filterLines.append("            should_use_row = False")
-        else:
-            filterLines.append(f"        if not (row['{cond['left']}'] {op} {cond['right']}):")
-            filterLines.append("            should_use_row = False")
-
-    sortCols = phiParams['ORDER BY'] if phiParams.get('ORDER BY') else groupCols
-
-    groupedQueryCode = f"""
-    grouped_results = {{}}
-
-    cur.execute("SELECT * FROM sales")
-    for row in cur:
-{chr(10).join(filterLines)}
-        # Use current row when it matches the parsed filter condition
-        if should_use_row:
-            # Build the group key using parsed grouping attributes
-            groupKey = tuple(row[attr] for attr in {groupCols})
-
-            # Create a new group entry the first time we see this key
-            if groupKey not in grouped_results:
-                grouped_results[groupKey] = {{
-{chr(10).join(aggregateSetupLines)}
-                }}
-
-{chr(10).join(aggregateUpdateLines)}
-    """
-    if not simpleMode:
-        groupedQueryCode = "grouped_results = {}"
-
-
-    groupingVarCode = ""
-    mfWarning = ""
-
-    # Keep single-variable mode explicit to avoid partial multi-variable behavior
-    if mfMode and phiParams['n'] != 1:
-        mfWarning = f"print('Current MF mode supports exactly one grouping variable. Input has n={phiParams['n']}.')"
-    elif mfMode and len(phiParams['GROUPING_VARIABLES']) > 0 and len(phiParams['PRED-LIST']) > 0:
-        gv = phiParams['GROUPING_VARIABLES'][0]
-        pred = phiParams['PRED-LIST'][0]
-
-        predicateChecks = []
-        predicateChecks.append("        rowMatchesPredicate = True")
-        predicateConditions = re.split(r"\s+and\s+", pred, flags=re.IGNORECASE)
-
-        for conditionText in predicateConditions:
-            conditionText = conditionText.strip()
-            parsedFilter = re.match(
-                rf"{gv}[.]([A-Za-z_]\w*)\s*(=|!=|>=|<=|>|<)\s*('([^']*)'|\d+)",
-                conditionText
-            )
-            if parsedFilter:
-                condCol = parsedFilter.group(1)
-                condOp = parsedFilter.group(2)
-                rawFilterValue = parsedFilter.group(3)
-                conditionValue = rawFilterValue.strip("'")
-
-                if rawFilterValue.startswith("'") and rawFilterValue.endswith("'"):
-                    conditionCode = f"row['{condCol}'] {condOp if condOp != '=' else '=='} '{conditionValue}'"
-                else:
-                    conditionCode = f"row['{condCol}'] {condOp if condOp != '=' else '=='} {conditionValue}"
-
-                predicateChecks.append(f"        if not ({conditionCode}):")
-                predicateChecks.append("            rowMatchesPredicate = False")
-
-        aggregateUpdateCode = []
-
-        for spec in aggregates:
-            expr = spec["expr"]
-            func = spec["func"]
-            col = spec["col"]
-
-            aggregateName = makeAggregateName(expr)
-
-            if "." in col:
-                colParts = col.split(".")
-                groupingVar = colParts[0]
-                sourceColumn = colParts[1]
-            else:
-                groupingVar = gv
-                sourceColumn = col
-
-            if groupingVar == gv:
-                if func == "sum":
-                    aggregateUpdateCode.append(f"                mf_struct[groupKeyValues]['{aggregateName}'] += row['{sourceColumn}']")
-                elif func == "count":
-                    aggregateUpdateCode.append(f"                mf_struct[groupKeyValues]['{aggregateName}'] += 1")
-                elif func == "avg":
-                    avgSum = aggregateName + "__sum"
-                    avgCount = aggregateName + "__count"
-                    aggregateUpdateCode.append(f"                mf_struct[groupKeyValues]['{avgSum}'] += row['{sourceColumn}']")
-                    aggregateUpdateCode.append(f"                mf_struct[groupKeyValues]['{avgCount}'] += 1")
-                elif func == "max":
-                    aggregateUpdateCode.append(f"                if mf_struct[groupKeyValues]['{aggregateName}'] == 0 or row['{sourceColumn}'] > mf_struct[groupKeyValues]['{aggregateName}']:")
-                    aggregateUpdateCode.append(f"                    mf_struct[groupKeyValues]['{aggregateName}'] = row['{sourceColumn}']")
-                elif func == "min":
-                    aggregateUpdateCode.append(f"                if mf_struct[groupKeyValues]['{aggregateName}'] == 0 or row['{sourceColumn}'] < mf_struct[groupKeyValues]['{aggregateName}']:")
-                    aggregateUpdateCode.append(f"                    mf_struct[groupKeyValues]['{aggregateName}'] = row['{sourceColumn}']")
-
-        if len(aggregateUpdateCode) == 0:
-            aggregateUpdateCode.append("                pass")
-
-        groupingVarCode = f"""
-    # --- MF SCAN FOR GROUPING VARIABLE {gv} ---
-    cur.execute("SELECT * FROM sales")
-    for row in cur:
-{chr(10).join(predicateChecks)}
-        if rowMatchesPredicate:
-            groupKeyValues = tuple(row[attr] for attr in {phiParams['V']})
-            if groupKeyValues in mf_struct:
-{chr(10).join(aggregateUpdateCode)}
-"""
-
+    # Writes the finalized Python code for _generated.py using a formatted multi-line string.
     generatedProgram = f"""
 import os
-import re
 import psycopg2
 import psycopg2.extras
 import tabulate
 from dotenv import load_dotenv
 
-# DO NOT EDIT THIS FILE, IT IS GENERATED BY generator.py
-
 def query():
-    def makeAggName(expr):
-        return expr.replace("(", "_").replace(")", "").replace(".", "_").replace("*", "star").replace(" ", "")
-
-    def passesHaving(row):
-        havingExpr = {repr(phiParams['HAVING'])}
-        if havingExpr is None:
-            return True
-
-        evalExpr = havingExpr
-        evalExpr = re.sub(r"\\bAND\\b", " and ", evalExpr, flags=re.IGNORECASE)
-        evalExpr = re.sub(r"\\bOR\\b", " or ", evalExpr, flags=re.IGNORECASE)
-        evalExpr = re.sub(r"(?<![<>=!])=(?!=)", "==", evalExpr)
-
-        aggCalls = re.findall(r"[A-Za-z_]\\w*\\s*\\(\\s*(?:[A-Za-z_][\\w\\.]*|\\*)\\s*\\)", evalExpr)
-        for aggExpr in sorted(set(aggCalls), key=len, reverse=True):
-            evalExpr = evalExpr.replace(aggExpr, makeAggName(aggExpr))
-
-        evalVals = {{}}
-        for key, val in row.items():
-            evalVals[makeAggName(str(key))] = val
-            if re.match(r"^[A-Za-z_]\\w*$", str(key)):
-                evalVals[str(key)] = val
-
-        try:
-            return bool(eval(evalExpr, {{"__builtins__": {{}}}}, evalVals))
-        except Exception:
-            return False
-
     load_dotenv()
-    # ... (connection setup) ...
-    conn = psycopg2.connect(dbname=os.getenv('DBNAME'), 
-                            user=os.getenv('USER'), 
-                            password=os.getenv('PASSWORD'),
-                            cursor_factory=psycopg2.extras.DictCursor)
+    conn = psycopg2.connect(dbname=os.getenv('DBNAME'), user=os.getenv('USER'), 
+                            password=os.getenv('PASSWORD'), cursor_factory=psycopg2.extras.DictCursor)
     cur = conn.cursor()
-    
     mf_struct = {{}}
-    
-    # --- TABLE SCAN 1: populate mf-struct with distinct values of grouping attribute (V) ---
-    {firstScanCode}
-    
-    # --- TABLE SCAN 2: simple grouped processing ---
-    {groupedQueryCode}
-    
-    # --- MF/EMF grouping variable scan ---
-    {groupingVarCode}
-    {mfWarning}
 
+    # --- SCAN 1: Discovery & Filtering ---
+{tableScan1}
+
+    # --- SCANS 2 to {phiParams['n']+1}: Processing ---
+{multiScanCode}
+
+    # --- OUTPUT ---
     output = []
-    if {simpleMode}:
-        for groupKey in grouped_results:
-            groupData = grouped_results[groupKey]
-
-            outputRow = {{}}
-            for i, attrName in enumerate({groupCols}):
-                outputRow[attrName] = groupKey[i]
-
-{chr(10).join(aggregateOutputLines)}
-            if passesHaving(outputRow):
-                output.append(outputRow)
-
-        # Sort grouped output so generated result is stable for testing
-        output.sort(key=lambda outRow: tuple(outRow[attrName] for attrName in {sortCols}))
-    else:        
-        for key, aggs in mf_struct.items():
-            row = {{attr: key[i] for i, attr in enumerate({phiParams['V']})}}
-
-            for aggregateName, aggregateValue in aggs.items():
-                if aggregateName.endswith("__sum"):
-                    averageName = aggregateName[:-5]
-                    avgCountName = averageName + "__count"
-                    if avgCountName in aggs and aggs[avgCountName] != 0:
-                        row[averageName] = aggs[aggregateName] / aggs[avgCountName]
-                    else:
-                        row[averageName] = 0
-                elif aggregateName.endswith("__count") and (aggregateName[:-7] + "__sum") in aggs:
-                    continue
-                else:
-                    row[aggregateName] = aggregateValue
-
-            if passesHaving(row):
-                output.append(row)
-
-    return tabulate.tabulate(output, headers="keys", tablefmt="psql")
+    # Converts internal mf_struct data into a list of row dictionaries for tabulate.
+    for key, aggs in mf_struct.items():
+        row = {{attr: key[j] for j, attr in enumerate({phiParams['V']})}}
+        for name, val in aggs.items():
+            if name.endswith("__sum"):
+                base = name[:-5]
+                count_name = base + "__count"
+                row[base] = val / aggs[count_name] if aggs[count_name] > 0 else 0
+            elif not name.endswith("__count"):
+                row[name] = val
+        output.append(row)
     
+    return tabulate.tabulate(output, headers="keys", tablefmt="psql")
 
-if "__main__" == __name__:
+if __name__ == "__main__":
     print(query())
     """
-
-    open("_generated.py", "w").write(generatedProgram)
+    
+    # Saves the generated program and executes it as a sub-process.
+    with open("_generated.py", "w") as f:
+        f.write(generatedProgram)
     subprocess.run([sys.executable, "_generated.py"])
 
-if "__main__" == __name__:
+if __name__ == "__main__":
     main()
