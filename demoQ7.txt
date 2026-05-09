@@ -1,0 +1,4 @@
+SELECT cust, prod, avg(quant), max(quant)
+FROM sales
+WHERE year=2026 AND state='NJ' OR quant>50 AND month<6
+GROUP BY cust, prod

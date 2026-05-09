@@ -1,5 +1,0 @@
-SELECT prod, avg(ny.quant), sum(ny.quant)
-FROM sales
-GROUP BY prod; ny
-SUCH THAT ny.state = 'NJ'
-HAVING avg(ny.quant) > 1

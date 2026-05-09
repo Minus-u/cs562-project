@@ -1,5 +1,5 @@
-SELECT cust, avg(v1.quant), sum(v2.quant)
+SELECT prod, avg(1.quant), count(2.quant)
 FROM sales
-GROUP BY cust; v1, v2
-SUCH THAT v1.state = 'NY', v2.state = 'NJ' AND v2.quant > avg_v1_quant
-HAVING NONE
+GROUP BY prod; 1, 2
+SUCH THAT 1.year = 2018, 2.year = 2019 AND 2.quant > avg_1_quant
+HAVING count(2.quant) > 100

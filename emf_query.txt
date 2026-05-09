@@ -1,7 +1,0 @@
-SELECT cust, count(ny.quant), sum(nj.quant), max(ct.quant)
-FROM sales
-GROUP BY cust; ny, nj, ct
-SUCH THAT ny.state = 'NY',
-          nj.state = 'NJ',
-          ct.state = 'CT'
-HAVING NONE

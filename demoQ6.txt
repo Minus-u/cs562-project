@@ -1,0 +1,5 @@
+SELECT cust, prod, avg(quant), max(quant)
+FROM sales
+WHERE year=2019
+GROUP BY cust, prod
+ORDER BY cust, prod
