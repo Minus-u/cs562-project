@@ -123,6 +123,8 @@ def interactiveInput():
     having = input('# 6. HAVING (or NONE): \n')
     phiParams['HAVING'] = None if having.upper() == 'NONE' else having
     
+    print('Additional clauses:')
+
     order_by = input('# 7. ORDER BY (or NONE, comma separated): \n')
     phiParams['ORDER BY'] = None if order_by.upper() == 'NONE' else [val.strip() for val in order_by.split(',')]
     
