@@ -1,9 +1,6 @@
 import subprocess
 import sys
 import re
-import os
-
-# --- Constants ---
 
 # Hard-coded schema data for the 'sales' table
 SALES_SCHEMA = {
