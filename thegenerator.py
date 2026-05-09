@@ -1,3 +1,16 @@
+"""
+CS562 DBMS II Final Project
+Team: CTRL ALT DB
+Members: Ryan Raymundo 20024436, Ryan Vaseem 20023920
+
+This program reads SQL-like, MF, and EMF query inputs, parses the query parts,
+and generates a Python file that scans the PostgreSQL sales table to compute
+the requested aggregates using an in-memory mf_struct.
+
+Libraries: psycopg2, python-dotenv, tabulate, re
+"""
+
+
 import subprocess
 import sys
 import re
